@@ -33,8 +33,10 @@
                 video_id: event.target.getVideoData().video_id,
                 video_src: event.target.getVideoUrl(),
                 title: event.target.getVideoData().title,
-                author: event.target.getVideoData().author
+                author: event.target.getVideoData().author,
+                time: event.target.getCurrentTime()
             };
+
             switch(event.data) {
                 case YT.PlayerState.PLAYING:
                     player_info.status = 'Playing';
@@ -43,8 +45,8 @@
                 case YT.PlayerState.PAUSED:
                     player_info.status = 'Paused';
                     track_youtube_player(player_info);
-                    break;
                 case YT.PlayerState.ENDED:
+                    break;
                     player_info.status = 'Ended';
                     track_youtube_player(player_info);
                     break;
@@ -70,7 +72,8 @@
                 video_id: 'Not Available', // Video ID not available opn ready state
                 video_src: event.target.getVideoUrl(),
                 title: event.target.getVideoData().title,
-                author: event.target.getVideoData().author
+                author: event.target.getVideoData().author,
+                time: event.target.getCurrentTime()
             };
             track_youtube_player(player_info);
         }
@@ -84,7 +87,8 @@
                     video_src: player_info.video_src,
                     video_id: player_info.video_id,
                     title: player_info.title,
-                    author: player_info.author
+                    author: player_info.author, 
+                    time: player_info.time
                 }
             });
         }

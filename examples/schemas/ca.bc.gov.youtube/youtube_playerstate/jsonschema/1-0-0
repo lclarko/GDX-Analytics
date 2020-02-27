@@ -28,8 +28,13 @@
         "author": {
             "type": ["string"],
 			"maxLength": 255
+        },
+		"time": {
+            "type": ["number"],
+			"minimum": 0,
+			"maximum": 1000000
         }
 	},
-    "required": ["status", "video_id", "video_src", "title", "author"],
+    "required": ["status", "video_id", "video_src", "title", "author", "time"],
 	"additionalProperties": false
 }
