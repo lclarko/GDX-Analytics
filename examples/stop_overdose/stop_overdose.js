@@ -38,10 +38,10 @@ window.snowplow('newTracker','rt',collector, {
     }
 
     // The Snowplow call that passes the map search context data to the collector.
-    // This function can be called from the drupal submit handler, to be called
-    // on successful submit of the map search form. This does not go in the head.
+    // This function could be called from the drupal submit handler, on successful
+    // submit of the map search form. 
     // The developer will have to retrieve these values and then set these variables
-    // in the backend submit handler.
+    // in the backend submit handler and pass it to the function.
     function trackContext(keyword_search, select_city) {
         window.snowplow('trackSelfDescribingEvent', {
             schema: "iglu:ca.bc.gov.googlemaps/marker_click/jsonschema/1-0-0",
