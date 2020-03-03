@@ -111,14 +111,14 @@ window.snowplow('newTracker','rt',collector, {
     // embeds, add the following two event listeners (and their callbacks) to the player object:
     //  'onReady': onPlayerReady, 'onStateChange': onPlayerStateChange.
     /*
-    function onYouTubeIframeAPIReady() {
-        player = new YT.Player(// Insert unique ID of embed iFrame. Ex: 'player' //, {
-            events: {
-                'onReady': onPlayerReady,
-                'onStateChange': onPlayerStateChange
-            }
-        });
-    }
+    |   function onYouTubeIframeAPIReady() {
+    |      player = new YT.Player(// Insert unique ID of embed iFrame. Ex: 'player' //, {
+    |          events: {
+    |              'onReady': onPlayerReady,
+    |               'onStateChange': onPlayerStateChange
+    |           }
+    |       });
+    |   }
     */
 
     // This will get called by the API once the youtube player is ready
