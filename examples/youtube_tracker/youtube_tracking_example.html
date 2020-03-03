@@ -57,13 +57,6 @@
 
         // Creates new youtube player object when the API loads.
         function onYouTubeIframeAPIReady() {
-
-            yt_players = document.getElementsByClassName('youtube_player');
-           for (var i = 0; i < yt_players.length; i++) {
-               console.log(yt_players.item(i).id);
-            }
-        
-
             player = new YT.Player('youtube_player', {
                 events: {
                     'onReady': onPlayerReady,
@@ -105,6 +98,6 @@
     <header>
       <h3>Snowplow Youtube Example</h3>
     </header>
-    <iframe class="youtube_player" id="youtube_player" width="560" height="315" src="https://www.youtube.com/embed/G9NL-ED0xdQ?enablejsapi=1" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+    <iframe id="youtube_player" width="560" height="315" src="https://www.youtube.com/embed/G9NL-ED0xdQ?enablejsapi=1" frameborder="0" allow="accelerometer; autoplay; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
     </body>
 </html>
