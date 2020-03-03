@@ -61,7 +61,9 @@ window.snowplow('newTracker','rt',collector, {
         |    marker = new google.maps.Marker({
         |        map: map,
         |        position: {lat: 59.327, lng: 18.067}
-        |        data: {}
+        |        data: {\\ This object will contain the marker data 
+        |               \\ (lat, long, SV_NAME, etc.) to be passed to the schema
+        |        }
         |    });
         |    marker.addListener('click', mapTracker(marker.data));
         
@@ -107,18 +109,25 @@ window.snowplow('newTracker','rt',collector, {
     }
     
     // This function gets called when the Youtube Iframe API has finished loading. 
-    // Creates new youtube player object. Wherever this is being called to create your YouTube
+    // This is just one example of creating the youtube player object, but 
+    // Stop Overdose may have a different implementation.
+    // If the embed iframes are hardcoded and not generated with the API, you could
+    // add a new class to each iframe element and loop through them, adding the events and callbacks.
+    // Wherever this is being called to create the YouTube
     // embeds, add the following two event listeners (and their callbacks) to the player object:
     //  'onReady': onPlayerReady, 'onStateChange': onPlayerStateChange.
     /*
     |   function onYouTubeIframeAPIReady() {
-    |      player = new YT.Player(// Insert unique ID of embed iFrame. Ex: 'player' //, {
-    |          events: {
-    |              'onReady': onPlayerReady,
-    |               'onStateChange': onPlayerStateChange
-    |           }
-    |       });
-    |   }
+    |       yt_players = document.getElementsByClassName('youtube_player');
+    |       for (var i = 0; i < yt_players.length; i++) {
+    |           player = new YT.Player(yt_players.item(i).id, {
+    |               events: {
+    |                  'onReady': onPlayerReady,
+    |                  'onStateChange': onPlayerStateChange
+    |               }
+    |           });
+    |        }
+    |    }
     */
 
     // This will get called by the API once the youtube player is ready
