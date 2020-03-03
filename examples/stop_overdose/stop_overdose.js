@@ -39,13 +39,15 @@ window.snowplow('newTracker','rt',collector, {
 
     // The Snowplow call that passes the map search context data to the collector.
     // This function can be called from the drupal submit handler, to be called
-    // on successful submit of the map search form.
-    function trackContext(search_keywords, search_city) {
+    // on successful submit of the map search form. This does not go in the head.
+    // The developer will have to retrieve these values and then set these variables
+    // in the backend submit handler.
+    function trackContext(keyword_search, select_city) {
         window.snowplow('trackSelfDescribingEvent', {
             schema: "iglu:ca.bc.gov.googlemaps/marker_click/jsonschema/1-0-0",
             data: {
-                keywords: search_keywords,
-                city: search_city,
+                keywords: keyword_search,
+                city: select_city,
             }
         });
     }
@@ -69,11 +71,7 @@ window.snowplow('newTracker','rt',collector, {
 
         https://developers.google.com/maps/documentation/javascript/markers#animate
     */
-    
-    // AddListener call to add callback to map marker on click event.
-    //marker.addListener('click', function(e) {
-    //    mapTracker(marker.data);
-    //});
+
 
 
     // Youtube Embed Video Tracking
