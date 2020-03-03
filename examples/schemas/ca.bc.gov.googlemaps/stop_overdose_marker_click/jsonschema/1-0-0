@@ -23,7 +23,7 @@
         },
         "description": {
             "type": ["string"],
-			"maxLength": 255
+			"maxLength": 1024
         },
         "hours": {
             "type": ["string"],

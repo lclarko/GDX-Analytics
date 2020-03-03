@@ -20,7 +20,7 @@ window.snowplow('newTracker','rt',collector, {
     
     // Google Maps Tracking
 
-    // The Snowplow call that passes marker click dat to the collector.
+    // The Snowplow call that passes marker click data to the collector.
     function mapTracker(data) {
         window.snowplow('trackSelfDescribingEvent', {
             schema: "iglu:ca.bc.gov.googlemaps/stop_overdose_marker_click/jsonschema/1-0-0",
@@ -73,9 +73,6 @@ window.snowplow('newTracker','rt',collector, {
     //    mapTracker(marker.data);
     //});
 
-    
-
-
 
     // Youtube Embed Video Tracking
 
@@ -109,18 +106,23 @@ window.snowplow('newTracker','rt',collector, {
         }
     }
     
-    // This function gets call when the Youtube Ifram API has finished loading. 
-    // Creates new youtube player object 
+    // This function gets called when the Youtube Iframe API has finished loading. 
+    // Creates new youtube player object. Wherever this is being called to create your YouTube
+    // embeds, add the following two event listeners (and their callbacks) to the player object:
+    //  'onReady': onPlayerReady, 'onStateChange': onPlayerStateChange.
+    /*
     function onYouTubeIframeAPIReady() {
-        player = new YT.Player(/* Insert unique ID of embed iFrame. Ex: 'youtube_player' */, {
+        player = new YT.Player(// Insert unique ID of embed iFrame. Ex: 'player' //, {
             events: {
                 'onReady': onPlayerReady,
                 'onStateChange': onPlayerStateChange
             }
         });
     }
+    */
 
-    // This will get called by the API once the youtube player is ready.
+    // This will get called by the API once the youtube player is ready
+    // and then calls the youtube tracker function.
     function onPlayerReady(event) {
         var player_info = {
             status: 'Ready', 
@@ -133,7 +135,7 @@ window.snowplow('newTracker','rt',collector, {
         track_youtube_player(player_info);
     }
 
-    // Sends snowplow event with youtube player state.
+    // Send snowplow event with youtube player state.
     function track_youtube_player(player_info) {
         window.snowplow('trackSelfDescribingEvent', {
             schema: "iglu:ca.bc.gov.youtube/youtube_playerstate/jsonschema/1-0-0",
