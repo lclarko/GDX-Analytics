@@ -109,7 +109,7 @@ window.snowplow('newTracker','rt',collector, {
     }
     
     // This function gets called when the Youtube Iframe API has finished loading. 
-    // This is just one example of creating the youtube player object, but 
+    // The following are two examples of creating the youtube player object, but 
     // Stop Overdose may have a different implementation.
     // If the embed iframes are hardcoded and not generated with the API, you could
     // add a new class to each iframe element and loop through them, adding the events and callbacks.
@@ -117,6 +117,7 @@ window.snowplow('newTracker','rt',collector, {
     // embeds, add the following two event listeners (and their callbacks) to the player object:
     //  'onReady': onPlayerReady, 'onStateChange': onPlayerStateChange.
     /*
+    
     |   function onYouTubeIframeAPIReady() {
     |       yt_players = document.getElementsByClassName('youtube_player');
     |       for (var i = 0; i < yt_players.length; i++) {
@@ -128,6 +129,15 @@ window.snowplow('newTracker','rt',collector, {
     |           });
     |        }
     |    }
+
+    |   function onYouTubeIframeAPIReady() {
+    |      player = new YT.Player(// Insert unique ID of embed iFrame. Ex: 'player' //, {
+    |          events: {
+    |              'onReady': onPlayerReady,
+    |               'onStateChange': onPlayerStateChange
+    |           }
+    |       });
+    |   }
     */
 
     // This will get called by the API once the youtube player is ready
