@@ -94,9 +94,9 @@ AS (
     b.load_event_start,
     b.load_event_end
  
-  FROM atomib.events AS a
+  FROM atomic.events AS a
  
-  INNER JOIN atomib.org_w3_performance_timing_1 AS b
+  INNER JOIN atomic.org_w3_performance_timing_1 AS b
     ON  a.event_id = b.root_id
     AND a.collector_tstamp = b.root_tstamp
  
