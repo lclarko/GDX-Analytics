@@ -9,6 +9,7 @@ var collector = 'spm.apps.gov.bc.ca';
   cookieLifetime: 86400 * 548,
   platform: 'web',
   post: true,
+  postPath: '/gov.bc.ca/51g'
   forceSecureTracker: true,
   contexts: {
    webPage: true,
