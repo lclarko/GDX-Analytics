@@ -19,47 +19,60 @@
 #               : 1 Filter and 1 Value
 #               :
 #               : python looker_embed_generator.py <<embed url>>
-#               :   '{"filter-name": ["matchtype": "matchtype-value", 
-#               :                     "values":"filter-value"]}'
+#               :   '{"filter-name": [{"matchtype": "matchtype-value",
+#               :                     "values":"filter-value"}]}'
 #               :
 #               : eg: python looker_embed_generator.py dashboards/18
-#               :   '{"City":["matchtype":"=", "values":"Metropolis"]}'
+#               :   '{"City":[{"matchtype":"=", "values":"Metropolis"}]}'
 #               :
 #               : or:
-#               : 
+#               :
 #               : 1 Filter and 2 or more Values
 #               :
 #               : python looker_embed_generator.py <<embed url>>
-#               :   '{"filter-name": ["matchtype": {"matchtype-value","values":"filter-value"},
-#               :                                  {"matchtype-value","values":"filter-value"}]}'
+#               :   '{"filter-name": ["matchtype":
+#               :       {"matchtype-value","values":"filter-value"},
+#               :       {"matchtype-value","values":"filter-value"}]}'
 #               :
 #               : eg: python looker_embed_generator.py dashboards/18
-#               :   '{"City":[{"matchtype":"=", "values":"Duncan - British Columbia"},
-#               :             {"matchtype":"starts", "values":"Nanaimo - British Columbia"}]'
+#               :   '{"City":[
+#               :       {"matchtype":"=",
+#               :           "values":"Duncan - British Columbia"},
+#               :       {"matchtype":"starts",
+#               :           "values":"Nanaimo - British Columbia"}]}'
 #               :
 #               : or:
-#               : 
+#               :
 #               : 2 Filter and 1 Value
 #               :
 #               : python looker_embed_generator.py <<embed url>>
-#               :   '{"filter-name": ["matchtype": {"matchtype-value","values":"filter-value"}],
-#               :    "filter-name": ["matchtype": {"matchtype-value","values":"filter-value"}]}'
+#               :   '{"filter-name": ["matchtype":
+#               :       {"matchtype-value","values":"filter-value"}],
+#               :    "filter-name": ["matchtype":
+#               :       {"matchtype-value","values":"filter-value"}]}'
 #               :
-#               : eg: python looker_embed_generator.py dashboards/snowplow_web_block::bc_gov_analytics_dashboard_1 
-#               :   '{"City":[{"matchtype":"=","values":"Victoria - British Columbia"}, 
-#               :     "City":[{"matchtype":"contains","values":"Vancouver - British Columbia"}]}'
+#               : eg: python looker_embed_generator.py
+#               :       dashboards/snowplow_web_block
+#               :                    ::bc_gov_analytics_dashboard_1
+#               :   '{"City":[{"matchtype":"=",
+#               :       "values":"Victoria - British Columbia"},
+#               :     "City":[{"matchtype":"contains",
+#               :       "values":"Vancouver - British Columbia"}]}'
 #               :
 #               : or:
-#               : 
+#               :
 #               : 1 Filter and comma separated values
 #               :
 #               : python looker_embed_generator.py <<embed url>>
-#               :   '{"filter-name": ["matchtype": "matchtype-value", 
+#               :   '{"filter-name": ["matchtype": "matchtype-value",
 #               :                     "values":"filter-value"]}'
 #               :
 #               : :python looker_embed_generator.py dashboards/18
-#               :   '{"Theme": ["matchtype": "=", 
-#               :               "values":"\"Birth, Adoption, Death, Marriage & Divorce\",\"Employment, Business & Economic Development\""]}'
+#               :   '{"Theme": [
+#               :       "matchtype": "=",
+#               :       "values":
+#               :           "\"Birth, Adoption, Death, Marriage & Divorce\",
+#               :           \"Employment, Business & Economic Development\""]}'
 #               :
 #               :
 #               : List of valid match types:
@@ -103,13 +116,16 @@ import sys  # to read command line parameters
 # The double slashes are required due to how looker parses
 # filter parameters in the embed_url string.
 def parse_filter_value(filter_value):
-    parsed_filter_value = urllib.quote(filter_value.replace(', ', r'\\, ').replace('\"',''))
+    """A function to parse the filter value"""
+    parsed_filter_value = urllib.quote(
+        filter_value.replace(', ', r'\\, ').replace('\"', ''))
     return parsed_filter_value
 
 
 # This function loops over the filters passed into the script and
 # generates the filters section of the embed url string.
 def encode_embed_filters(filters):
+    """A Function to encode embed filters"""
     embed_url_string = "?filter_config=%7B"
     filter_string = ''
     index = 1
@@ -125,12 +141,12 @@ def encode_embed_filters(filters):
 # This function loops over each filter value and generates the
 # the strings for individual filter values
 def build_filter_string(filter_values):
+    """A function to build a filter string"""
     filter_string = ""
     index = 1
     for filter_value in filter_values:
         match_type = filter_value["matchtype"]
         value = parse_filter_value(filter_value["values"])
-        #value = filter_value["values"]
         filter_string += "%7B\"type\":\"" + match_type + \
             "\",\"values\":%5B%7B\"constant\":\"" + \
             value + "\"%7D,%7B%7D%5D%7D"
@@ -147,13 +163,14 @@ filtered = False
 
 # Set configuration
 if (len(sys.argv) < 2):  # Will be 1 if no arguments, 2 if one argument
-    print "Usage: python looker_embed_generator.py \
-        <<embed url>> {\"filtername\": \"filtervalue\"}"
+    print("Usage: python looker_embed_generator.py \
+        <<embed url>> {\"filtername\": \"filtervalue\"}")
     sys.exit(1)
 
 if (len(sys.argv) == 3):  # Will be 3 if passing in a json object of filters
     filtered = True
     filters = json.loads(sys.argv[2])
+
 
 embed_url = '/embed/' + sys.argv[1]
 
@@ -166,19 +183,23 @@ if filtered:
 lookerkey = os.getenv('LOOKERKEY')
 
 if (lookerkey is None):  # confirm that the environment variable is set
-    print "LOOKERKEY environment variable not set"
+    print("LOOKERKEY environment variable not set")
     sys.exit(1)
 
 lookerurl = 'dev.analytics.gov.bc.ca'  # set to the URL where Looker is hosted
 
 
 class Looker:
+    """Creating a looker class"""
+
     def __init__(self, host, secret):
         self.secret = secret
         self.host = host
 
 
 class User:
+    """Creating a user class"""
+
     def __init__(self, id=id, first_name=None, last_name=None,
                  permissions=[], models=[], group_ids=[],
                  external_group_id=None,
@@ -195,8 +216,11 @@ class User:
 
 
 class URL:
+    """Creating a URL class"""
+
     def __init__(self, looker, user, session_length,
                  embed_url, force_logout_login=False):
+        """A init function"""
         self.looker = looker
         self.user = user
         self.path = '/login/embed/' + urllib.quote_plus(embed_url)
@@ -205,15 +229,18 @@ class URL:
 
     # The current time as a UNIX timestamp.
     def set_time(self):
+        """A time setting function"""
         self.time = json.dumps(int(time.time()))
 
     # Random string cannot be repeated within an hour. Prevents an
     # attacker from re-submitting a legitimate user's URL to gather
     # information they shouldn't have.
     def set_nonce(self):
+        """A function that sets a nonce"""
         self.nonce = json.dumps(binascii.hexlify(os.urandom(16)))
 
     def sign(self):
+        """A sign function"""
         #  Do not change the order of these
         string_to_sign = ""
         string_to_sign = string_to_sign + self.looker.host + "\n"
@@ -234,6 +261,7 @@ class URL:
         self.signature = base64.b64encode(signer.digest())
 
     def to_string(self):
+        """Function to string"""
         self.set_time()
         self.set_nonce()
         self.sign()
@@ -261,6 +289,7 @@ class URL:
 
 
 def test():
+    """A test function"""
     looker = Looker(lookerurl, lookerkey)
 
     user = User(50,
@@ -279,10 +308,13 @@ def test():
     # Set TTL for embed code. 60*15 = 15 minutes
     timeout = 60 * 15
 
-    url = URL(looker, user, timeout, embed_url + ('&' if filtered else '?') +
-              'embed_domain=http://localhost:8888', force_logout_login=True)
+    url = URL(looker,
+              user,
+              timeout,
+              embed_url + ('&' if filtered else '?')
+              + 'embed_domain=http://localhost:8888', force_logout_login=True)
 
     return "https://" + url.to_string()
 
 
-print test()
+print(test())

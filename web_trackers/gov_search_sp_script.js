@@ -1,11 +1,12 @@
-// <!-- Snowplow starts plowing - Search vA.2.10.2 -->
+// <!-- Snowplow starts plowing - Search vE.2.14.0 -->
 ;(function(p,l,o,w,i,n,g){if(!p[i]){p.GlobalSnowplowNamespace=p.GlobalSnowplowNamespace||[];
     p.GlobalSnowplowNamespace.push(i);p[i]=function(){(p[i].q=p[i].q||[]).push(arguments)
     };p[i].q=p[i].q||[];n=l.createElement(o);g=l.getElementsByTagName(o)[0];n.async=1;
-    n.src=w;g.parentNode.insertBefore(n,g)}}(window,document,"script","https://sp-js.apps.gov.bc.ca/MDWay3UqFnIiGVLIo7aoMi4xMC4y.js","snowplow"));
-    var collector = 'spm.gov.bc.ca';
+    n.src=w;g.parentNode.insertBefore(n,g)}}(window,document,"script","https://www2.gov.bc.ca/StaticWebResources/static/sp/sp-2-14-0.js","snowplow"));
+    var collector = 'spm.apps.gov.bc.ca';
     window.snowplow('newTracker','rt',collector, {
         appId: "Snowplow_gov",
+        cookieLifetime: 86400 * 548,
         platform: 'web',
         post: true,
         forceSecureTracker: true,
@@ -25,14 +26,15 @@
         }
       }]
     );
-    window.snowplow('trackSiteSearch',
-    	getUrlParamArray('q','')
-    );
-
+    if (window.location.search.indexOf('q=') > -1) {
+        window.snowplow('trackSiteSearch',
+    	    getUrlParamArray('q','')
+        );
+    }
     function getUrlParamArray(param, defaultValue) {
     	var vars = [];
         var parts = window.location.href.replace(/[?&]+([^=&]+)=([^&]*)/gi, function(m,key,value) {
-        	if ( key === param ) {
+            if ( key === param ) {
         		vars.push(value);
         	}
         });

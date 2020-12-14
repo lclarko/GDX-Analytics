@@ -15,23 +15,24 @@
 # Usage         : python asset_data_to_redshift.py configfile.json
 #
 
-import boto3  # s3 access
-from botocore.exceptions import ClientError
-import pandas as pd  # data processing
 import re  # regular expressions
 from io import StringIO
 import os  # to read environment variables
-import psycopg2  # to connect to Redshift
 import json  # to read json config files
 import sys  # to read command line parameters
 import os.path  # file handling
 import logging
+import boto3  # s3 access
+from botocore.exceptions import ClientError
+import pandas as pd  # data processing
+import pandas.errors
+from lib.redshift import RedShift
 
 from ua_parser import user_agent_parser
 # ua_parser documentation: https://github.com/ua-parser/uap-python
 
 from referer_parser import Referer
-# referer_parser documentation: 
+# referer_parser documentation:
 # https://github.com/snowplow-referer-parser/referer-parser
 
 
@@ -56,15 +57,22 @@ formatter = logging.Formatter("%(levelname)s:%(name)s:%(asctime)s:%(message)s")
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
+
+def clean_exit(code, message):
+    """Exits with a logger message and code"""
+    logger.debug('Exiting with code %s : %s', str(code), message)
+    sys.exit(code)
+
+
 # check that configuration file was passed as argument
 if (len(sys.argv) != 2):
     print('Usage: python asset_data_to_redshift.py config.json')
-    sys.exit(1)
+    clean_exit(1, 'Bad command use.')
 configfile = sys.argv[1]
 # confirm that the file exists
 if os.path.isfile(configfile) is False:
     print("Invalid file name {}".format(configfile))
-    sys.exit(1)
+    clean_exit(1, 'Bad file name.')
 # open the confifile for reading
 with open(configfile) as f:
     data = json.load(f)
@@ -195,6 +203,21 @@ for object_summary in objects_to_process:
 
     # get the object from S3 and take its contents as body
     obj = client.get_object(Bucket=bucket, Key=object_summary.key)
+
+    # The file is an empty upload. Key to goodfile and continue
+    if(obj['ContentLength'] == 0):
+        logger.info('%s is empty, keying to goodfile and proceeding.',
+                    object_summary.key)
+        outfile = goodfile
+        try:
+            client.copy_object(Bucket=f"{bucket}",
+                               CopySource=f"{bucket}/{object_summary.key}",
+                               Key=outfile)
+        except ClientError:
+            logger.exception("S3 transfer failed")
+        clean_exit(0, f'Goodfile {object_summary.key} in objects to process, '
+                   'no further processing.')
+
     body = obj['Body']
 
     # Create an object to hold the data while parsing
@@ -216,7 +239,7 @@ for object_summary in objects_to_process:
             # The config contains regex's that correspond to the
             # number of columns in the log entry.
             # This is necessary because some log entries do not
-            # have the tenth column for proxy port number.
+            # have the tenth column for server response time in ms.
             # Check if there are 9 or 10 columns in access log entry by
             # attempting to apply these regex's until finding one that parses.
             for exp in data['access_log_parse']['regexs']:
@@ -235,9 +258,7 @@ for object_summary in objects_to_process:
                     # Parse user_agent and referrer strings into lists
                     parsed_ua = user_agent_parser.Parse(user_agent)
                     parsed_referrer_url = Referer(referrer_url,
-                                                  data['access_log_parse']
-                                                  ['referrer_parse']
-                                                  ['curr_url'])
+                                                  data['asset_scheme_and_authority'])
 
                     # Add OS family and version to user agent string
                     ua_string = '|' + parsed_ua['os']['family']
@@ -285,6 +306,9 @@ for object_summary in objects_to_process:
                     # Add the parsed log entry line to the list
                     parsed_list.append(parsed_line)
 
+                    # Break after first match
+                    break
+
         # Concatenate all the parsed lines together with the end of line char
         csv_string = linefeed.join(parsed_list)
         logger.info(object_summary.key + " parsed successfully")
@@ -315,26 +339,46 @@ for object_summary in objects_to_process:
                 logger.exception("S3 transfer failed.\n{0}".format(e.message))
             continue
 
-    # Check for an empty file. If it's empty, accept it as good and skip
+    # Check for an empty file. If it's empty, accept it as bad and skip
     # to the next object to process
     try:
-        df = pd.read_csv(StringIO(csv_string), sep=delim, index_col=False,
-                         dtype=dtype_dic, usecols=range(column_count))
-    except Exception as e:
+        df = pd.read_csv(
+            StringIO(csv_string),
+            sep=delim,
+            index_col=False,
+            dtype=dtype_dic,
+            usecols=range(column_count))
+    except pandas.errors.EmptyDataError as _e:
         logger.exception('exception reading {0}'.format(object_summary.key))
-        if (str(e) == "No columns to parse from file"):
-            logger.warning('File is empty, keying to goodfile \
+        if (str(_e) == "No columns to parse from file"):
+            logger.warning('File is empty, keying to badfile \
                            and proceeding.')
-            outfile = goodfile
+            outfile = badfile
         else:
             logger.warning('File not empty, keying to badfile \
                            and proceeding.')
             outfile = badfile
-        client.copy_object(Bucket="sp-ca-bc-gov-131565110619-12-microservices",
-                           CopySource="sp-ca-bc-gov-\
-                           131565110619-12-microservices/"
-                           + object_summary.key, Key=outfile)
-        continue
+
+        try:
+            client.copy_object(Bucket=f"{bucket}",
+                               CopySource=f"{bucket}/{object_summary.key}",
+                               Key=outfile)
+        except ClientError:
+            logger.exception("S3 transfer failed")
+        clean_exit(1, f'Bad file {object_summary.key} in objects to process, '
+                   'no further processing.')
+    except ValueError:
+        logger.exception('ValueError exception reading %s', object_summary.key)
+        logger.warning('Keying to badfile and proceeding.')
+        outfile = badfile
+        try:
+            client.copy_object(Bucket=f"{bucket}",
+                               CopySource=f"{bucket}/{object_summary.key}",
+                               Key=outfile)
+        except ClientError:
+            logger.exception("S3 transfer failed")
+        clean_exit(1, f'Bad file {object_summary.key} in objects to process, '
+                   'no further processing.')
 
     # map the dataframe column names to match the columns from the configuation
     df.columns = columns
@@ -360,7 +404,7 @@ for object_summary in objects_to_process:
         for thisfield in data['dateformat']:
             df[thisfield['field']] = \
                 pd.to_datetime(df[thisfield['field']],
-                               format=thisfield['format'])
+                                   format=thisfield['format'])
 
     # Put the full data set into a buffer and write it
     # to a "|" delimited file in the batch directory
@@ -408,20 +452,12 @@ COMMIT;
 
     # Execute the transaction against Redshift using the psycopg2 library
     logger.debug(logquery)
-    with psycopg2.connect(conn_string) as conn:
-        with conn.cursor() as curs:
-            try:
-                curs.execute(query)
-            # if the DB call fails, print error and place file in /bad
-            except psycopg2.Error as e:
-                logger.error("Loading {0} to RedShift failed\n{1}"
-                             .format(batchfile, e.pgerror))
-                outfile = badfile
-            # if the DB call succeed, place file in /good
-            else:
-                logger.info("Loaded {0} to RedShift successfully"
-                            .format(batchfile))
-                outfile = goodfile
+    spdb = RedShift.snowplow(batchfile)
+    if spdb.query(query):
+        outfile = goodfile
+    else:
+        outfile = badfile
+    spdb.close_connection()
 
     # copy the object to the S3 outfile (processed/good/ or processed/bad/)
     try:
@@ -429,5 +465,11 @@ COMMIT;
             Bucket="sp-ca-bc-gov-131565110619-12-microservices",
             CopySource="sp-ca-bc-gov-131565110619-12-microservices/"
             + object_summary.key, Key=outfile)
-    except boto3.exceptions.ClientError:
+    except ClientError:
         logger.exception("S3 transfer failed")
+    if outfile == badfile:
+        clean_exit(1, f'Bad file {object_summary.key} in objects to process, '
+                   'no further processing.')
+    logger.debug("finished %s", object_summary.key)
+
+clean_exit(0, 'Finished all processing cleanly.')

@@ -4,7 +4,7 @@
     "destination": "processed",
     "directory": "cmslite_gdx",
     "doc": "gov_assets.*",
-    "dbtable": "cmslite.asset_downloads",
+    "dbtable": "microservice.asset_downloads",
     "column_count": 16,
     "columns": [
       "ip",
@@ -16,7 +16,7 @@
       "return_size",
       "referrer",
       "user_agent_http_request_header",
-      "proxy",
+      "request_response_time",
       "os_family",
       "os_version",
       "browser_family",
@@ -35,7 +35,7 @@
       "Source Translated Port"
     ],
     "delim": "|",
-    "truncate": false,
+    "truncate": true,
     "dateformat": [
       {
         "field": "date/timestamp",
@@ -70,9 +70,10 @@
         "replace": "%7C"
       },
       "linefeed": "\r\n",
-      "ua_parse": {},
-      "referrer_parse":{
-        "curr_url": "https://www2.gov.bc.ca"
-      }
-    }
+      "ua_parse": {}
+    },
+    "schema_name": "microservice",
+    "asset_host": "www2.gov.bc.ca",
+    "asset_source": "CMSLite",
+    "asset_scheme_and_authority": "https://www2.gov.bc.ca"
 }

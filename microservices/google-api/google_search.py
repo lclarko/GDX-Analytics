@@ -1,3 +1,4 @@
+"""Google Search Console API Loader Script"""
 ###################################################################
 # Script Name   : google_search.py
 #
@@ -53,88 +54,184 @@
 
 
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from time import sleep
-import httplib2
 import json
 import argparse
-from oauth2client.client import flow_from_clientsecrets
-from oauth2client.file import Storage
-from oauth2client import tools
-from apiclient.discovery import build
-import psycopg2  # For Amazon Redshift IO
-import boto3     # For Amazon S3 IO
 import sys       # to read command line parameters
 import os.path   # file handling
 import io        # file and stream handling
-
-# set up logging
 import logging
+import signal
+import backoff
+import boto3     # For Amazon S3 IO
+import httplib2
+from oauth2client.client import HttpAccessTokenRefreshError
+from oauth2client.client import flow_from_clientsecrets
+from oauth2client.file import Storage
+from oauth2client import tools
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError as GoogleHttpError
+import psycopg2  # For Amazon Redshift IO
+import lib.logs as log
+
+
+# Ctrl+C
+def signal_handler(sig, frame):
+    '''Ctrl+C signal handler'''
+    logger.debug('singal handler sig: %s frame: %s', sig, frame)
+    logger.info('Ctrl+C pressed!')
+    sys.exit(0)
+
+
+signal.signal(signal.SIGINT, signal_handler)
+
+
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
-# create stdout handler for logs at the INFO level
-handler = logging.StreamHandler()
-handler.setLevel(logging.INFO)
-formatter = logging.Formatter("%(message)s")
-handler.setFormatter(formatter)
-logger.addHandler(handler)
-
-# create file handler for logs at the DEBUG level
-log_filename = '{0}'.format(os.path.basename(__file__).replace('.py', '.log'))
-handler = logging.FileHandler(os.path.join('logs', log_filename), "a",
-                              encoding=None, delay="true")
-handler.setLevel(logging.DEBUG)
-formatter = logging.Formatter("%(levelname)s:%(name)s:%(asctime)s:%(message)s")
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+log.setup()
 
 
-# Check for a sites last loaded date in Redshift
-def last_loaded(site_name):
+def clean_exit(code, message):
+    """Exits with a logger message and code"""
+    logger.debug('Exiting with code %s : %s', str(code), message)
+    sys.exit(code)
+
+
+# Custom backoff logging handlers
+def backoff_hdlr(details):
+    """Event handler for use in backoff decorators on_backoff kwarg"""
+    msg = "Backing off %s(...) for %.1fs after try %i"
+    log_args = [details['target'].__name__, details['wait'], details['tries']]
+    logger.debug(msg, *log_args)
+
+
+def giveup_hdlr(details):
+    """Event handler for for use backoff decorators on_giveup kwarg"""
+    msg = "Give up calling %s(...) after %.1fs elapsed over %i tries"
+    log_args = [details['target'].__name__, details['elapsed'],
+                details['tries']]
+    logger.error(msg, *log_args)
+    clean_exit(1,'could not reach Google Search Console after backoff.')
+
+
+def last_loaded(_s):
+    """Check for a sites last loaded date in Redshift"""
     # Load the Redshift connection
     con = psycopg2.connect(conn_string)
     cursor = con.cursor()
     # query the latest date for any search data on this site loaded to redshift
-    query = ("SELECT MAX(DATE) "
-             "FROM google.googlesearch "
-             "WHERE site = '{0}'").format(site_name)
-    cursor.execute(query)
+    _q = f"SELECT MAX(DATE) FROM {config_dbtable} WHERE site = '{_s}'"
+    cursor.execute(_q)
     # get the last loaded date
-    last_loaded_date = (cursor.fetchall())[0][0]
+    lld = (cursor.fetchall())[0][0]
     # close the redshift connection
     cursor.close()
     con.commit()
     con.close()
-    return last_loaded_date
+    return lld
 
 
 # the latest available Google API data is two less than the query date (today)
 latest_date = date.today() - timedelta(days=2)
 
+# Command line arguments
+parser = argparse.ArgumentParser(
+    parents=[tools.argparser],
+    description='GDX Analytics ETL utility for Google search.')
+parser.add_argument('-o', '--cred', help='OAuth Credentials JSON file.')
+parser.add_argument('-a', '--auth', help='Stored authorization dat file.')
+parser.add_argument('-c', '--conf', help='Microservice configuration file.')
+flags = parser.parse_args()
+flags.noauth_local_webserver = True
+
+CLIENT_SECRET = flags.cred
+AUTHORIZATION = flags.auth
+CONFIG = flags.conf
+
+if CLIENT_SECRET is None or AUTHORIZATION is None or CONFIG is None:
+    logger.error('Missing one or more requied arguments.')
+    sys.exit(1)
+
+# calling the Google API. If credentials.dat is not yet generated
+# then brower based Google Account validation will be required
+API_NAME = 'searchconsole'
+API_VERSION = 'v1'
+DISCOVERY_URI = ('https://www.googleapis.com/'
+                 'discovery/v1/apis/webmasters/v3/rest')
+
+flow_scope = 'https://www.googleapis.com/auth/webmasters.readonly'
+flow = flow_from_clientsecrets(
+    CLIENT_SECRET,
+    scope=flow_scope,
+    redirect_uri='urn:ietf:wg:oauth:2.0:oob')
+
+flow.params['access_type'] = 'offline'
+flow.params['approval_prompt'] = 'force'
+
+storage = Storage(AUTHORIZATION)
+credentials = storage.get()
+
+if credentials is not None and credentials.access_token_expired:
+    try:
+        h = httplib2.Http()
+        credentials.refresh(h)
+    except HttpAccessTokenRefreshError:
+        pass
+
+if credentials is None or credentials.invalid:
+    credentials = tools.run_flow(flow, storage, flags)
+
+http = credentials.authorize(httplib2.Http())
+
+
+# discoveryServiceUrl can become unavailable: use backoff
+@backoff.on_exception(backoff.expo, GoogleHttpError,
+                      on_backoff=backoff_hdlr, on_giveup=giveup_hdlr,
+                      factor=0.5, max_tries=10, logger=None)
+def build_service():
+    """Consruct a resource to interact with the Search Console API service"""
+    # disabling cache-discovery to suppress warnings on:
+    # ImportError: file_cache is unavailable when using oauth2client >= 4.0.0
+    # https://stackoverflow.com/questions/40154672/importerror-file-cache-is-unavailable-when-using-python-client-for-google-ser
+    svc = build(API_NAME,
+                API_VERSION,
+                http=http,
+                discoveryServiceUrl=DISCOVERY_URI,
+                cache_discovery=False)
+    return svc
+
+
+service = build_service()
+
 # Read configuration file from env parameter
-with open(os.environ['GOOGLE_MICROSERVICE_CONFIG']) as f:
+with open(CONFIG) as f:
     config = json.load(f)
 
-sites = config['sites']
-bucket = config['bucket']
-dbtable = config['dbtable']
+config_sites = config['sites']
+config_bucket = config['bucket']
+config_dbtable = config['dbtable']
+config_source = config['source']
+config_directory = config['directory']
 
 # set up the S3 resource
 client = boto3.client('s3')
 resource = boto3.resource('s3')
 
 # set up the Redshift connection
-conn_string = """
-dbname='{dbname}' host='{host}' port='{port}' user='{user}' password={password}
-""".format(dbname='snowplow',
-           host='redshift.analytics.gov.bc.ca',
-           port='5439',
-           user=os.environ['pguser'],
-           password=os.environ['pgpass'])
+dbname = 'snowplow'
+host = 'redshift.analytics.gov.bc.ca'
+port = 5439
+pguser = os.environ['pguser']
+pgpass = os.environ['pgpass']
+conn_string = (
+    f"dbname='{dbname}' "
+    f"host='{host}' "
+    f"port='{port}' "
+    f"user='{pguser}' "
+    f"password={pgpass}")
 
 # each site in the config list of sites gets processed in this loop
-for site_item in sites:
+for site_item in config_sites:  # noqa: C901
     # read the config for the site name and default start date if specified
     site_name = site_item["name"]
 
@@ -153,14 +250,12 @@ for site_item in sites:
         start_date_default = date.today() - timedelta(days=480)
     # if a start date was specified, it has to be formatted into a date type
     else:
-        start_date_default = map(int, start_date_default.split('-'))
-        start_date_default = date(start_date_default[0],
-                                  start_date_default[1],
-                                  start_date_default[2])
+        start_date_default = datetime.strptime(
+            start_date_default, '%Y-%m-%d').date()
 
     # Load 30 days at a time until the data in Redshift has
     # caught up to the most recently available data from Google
-    while last_loaded_date is None or last_loaded_date < latest_date:
+    while last_loaded_date is None or last_loaded_date <= latest_date:
 
         # if there isn't data in Redshift for this site,
         # start at the start_date_default set earlier
@@ -170,73 +265,39 @@ for site_item in sites:
         else:
             start_dt = last_loaded_date + timedelta(days=1)
 
-        # if the start_dt is the latest date, there is no new data: skip site
-        if start_dt == latest_date:
+        # the start_dt cannot exceed the latest date
+        if start_dt > latest_date:
             break
 
         # end_dt will be the lesser of:
         # (up to) 1 month ahead of start_dt OR (up to) two days before now.
         end_dt = min(start_dt + timedelta(days=30), latest_date)
 
-        # set the file name that will be written to S3
-        site_clean = re.sub(r'^https?:\/\/', '', re.sub(r'\/$', '', site_name))
-        outfile = "googlesearch-" + site_clean + "-" + str(start_dt) + "-" + str(end_dt) + ".csv"
-        object_key = 'client/google_gdx/{0}'.format(outfile)
+        # prepare stream with header
+        stream = io.StringIO("site|date|query|country|device|"
+                             "page|position|clicks|ctr|impressions\n")
 
-        # calling the Google API. If credentials.dat is not yet generated
-        # then brower based Google Account validation will be required
-        API_NAME = 'searchconsole'
-        API_VERSION = 'v1'
-        DISCOVERY_URI = 'https://www.googleapis.com/discovery/v1/apis/webmasters/v3/rest'
-
-        parser = argparse.ArgumentParser(parents=[tools.argparser])
-        flags = parser.parse_args()
-        flags.noauth_local_webserver = True
-        credentials_file = 'credentials.json'
-
-        flow_scope = 'https://www.googleapis.com/auth/webmasters.readonly'
-        flow = flow_from_clientsecrets(credentials_file, scope=flow_scope, redirect_uri='urn:ietf:wg:oauth:2.0:oob')
-
-        flow.params['access_type'] = 'offline'
-        flow.params['approval_prompt'] = 'force'
-
-        storage = Storage('credentials.dat')
-        credentials = storage.get()
-
-        if credentials is not None and credentials.access_token_expired:
-            try:
-                h = httplib2.Http()
-                credentials.refresh(h)
-            except Exception as e:
-                pass
-
-        if credentials is None or credentials.invalid:
-            credentials = tools.run_flow(flow, storage, flags)
-
-        http = credentials.authorize(httplib2.Http())
-
-        service = build(API_NAME, API_VERSION, http=http, discoveryServiceUrl=DISCOVERY_URI)
-        # site_list_response = service.sites().list().execute()
-
-        # prepare stream
-        stream = io.StringIO()
-
-        # site is prepended to the response from the Google Search API
-        outrow = u"site|date|query|country|device|page|position|clicks|ctr|impressions\n"
-        stream.write(outrow)
-
-        # Limit each query to 20000 rows. If there are more than 20000 rows in a given day, it will split the query up.
+        # Limit each query to 20000 rows. If there are more than 20000 rows
+        # in a given day, it will split the query up.
         rowlimit = 20000
         index = 0
 
-        # daterange yields a generator of all dates from date1 to date2
-        def daterange(date1, date2):
-            for n in range(int((date2 - date1).days)+1):
-                yield date1 + timedelta(n)
+        def daterange(start_date, end_date):
+            """yields a generator of all dates from startDate to endDate"""
+            logger.debug("daterange called with startDate: %s and endDate: %s",
+                         start_date, end_date)
+            assert end_date >= start_date, (f'start_date: {start_date} '
+                                            'cannot exceed end_date: '
+                                            f'{end_date} in daterange generator')
+            for _n in range(int((end_date - start_date).days) + 1):
+                yield start_date + timedelta(_n)
 
         search_analytics_response = ''
 
         # loops on each date from start date to the end date, inclusive
+        # initializing date_in_range avoids pylint [undefined-loop-variable]
+        date_in_range = ()
+        max_date_in_data = '0'
         for date_in_range in daterange(start_dt, end_dt):
             # A wait time of 250ms each query reduces chance of HTTP 429 error
             # "Rate Limit Exceeded", handled below
@@ -245,9 +306,13 @@ for site_item in sites:
 
             index = 0
             while (index == 0 or ('rows' in search_analytics_response)):
-                logger.debug(str(date_in_range) + " " + str(index))
+                logger.debug('%s %s', str(date_in_range), index)
 
-                # The request body for the Google Search API query
+                # The order of the values in the dimensions[] block of this
+                #  Google Search API query determines the order of the keys[]
+                #  values in the response body.
+                # IMPORTANT: logic is tied to the current order; any change
+                #  to the current order will require refactoring this script.
                 bodyvar = {
                     "aggregationType": 'auto',
                     "startDate": str(date_in_range),
@@ -257,11 +322,9 @@ for site_item in sites:
                         "query",
                         "country",
                         "device",
-                        "page"
-                        ],
+                        "page"],
                     "rowLimit": rowlimit,
-                    "startRow": index * rowlimit
-                    }
+                    "startRow": index * rowlimit}
 
                 # This query to the Google Search API may eventually yield an
                 # HTTP response code of 429, "Rate Limit Exceeded".
@@ -273,45 +336,83 @@ for site_item in sites:
                 retry = 1
                 while True:
                     try:
-                        search_analytics_response = service.searchanalytics().query(siteUrl=site_name, body=bodyvar).execute()
-                    except Exception as e:
+                        search_analytics_response = service.searchanalytics()\
+                            .query(siteUrl=site_name, body=bodyvar).execute()
+                    except GoogleHttpError:
                         if retry == 11:
-                            logger.error("Failing with HTTP error after 10 retries with query time easening.")
+                            logger.error(("Failing with HTTP error after 10 "
+                                          "retries with query time easening."))
                             sys.exit()
                         wait_time = wait_time * 2
-                        logger.warning("retrying site " +  site_name +": {0} with wait time {1}"
-                                       .format(retry, wait_time))
+                        logger.warning(
+                            "retrying site %s: %s with wait time %s",
+                            site_name, retry, wait_time)
                         retry = retry + 1
                         sleep(wait_time)
                     else:
                         break
 
                 index = index + 1
-                if ('rows' in search_analytics_response):
+
+                if 'rows' in search_analytics_response:
                     for row in search_analytics_response['rows']:
                         outrow = site_name + "|"
-                        for key in row['keys']:
+                        for i, key in enumerate(row['keys']):
+                            # keys[0] contains the date value.
+                            if i == 0:
+                                # Find max date in data to use in filename.
+                                max_date_in_data = max(max_date_in_data, key)
                             # for now, we strip | from searches
-                            key = re.sub('\|', '', key)
-                            # for now, we strip | from searches
+                            key = re.sub(r'\|', '', key)
+                            # for now, we strip \\ from searches
                             key = re.sub('\\\\', '', key)
                             outrow = outrow + key + "|"
-                        outrow = outrow + str(row['position']) + "|" + re.sub('\.0', '', str(row['clicks'])) + "|" + str(row['ctr']) + "|" + re.sub('\.0', '', str(row['impressions'])) + "\n"
+                        outrow = \
+                            outrow + str(row['position']) + "|" + \
+                            re.sub(r'\.0', '', str(row['clicks'])) + "|" + \
+                            str(row['ctr']) + "|" + \
+                            re.sub(r'\.0', '', str(row['impressions'])) + "\n"
                         stream.write(outrow)
+        
+        # checks if only the header was written (68 bytes in stream)
+        if stream.tell() == 68:
+            logger.warning('No data retrieved for %s over date request range '
+                           '%s - %s. Skipping s3 object creatiton and '
+                           'Redshift load steps.',
+                           site_name, start_dt, end_dt)
+            # continue without writing a file.
+            continue
+        
+        if max_date_in_data < str(end_dt):
+            logger.warning('The date range in the request spanned %s - %s, '
+                           'but the max date in the data retrieved was: %s',
+                           str(start_dt),str(end_dt),str(max_date_in_data))
+
+        # set the file name that will be written to S3
+        # 
+        site_fqdn = re.sub(r'^https?:\/\/', '', re.sub(r'\/$', '', site_name))
+        outfile = f"googlesearch-{site_fqdn}-{start_dt}-{max_date_in_data}.csv"
+        object_key = f"{config_source}/{config_directory}/{outfile}"
 
         # Write the stream to an outfile in the S3 bucket with naming
         # like "googlesearch-sitename-startdate-enddate.csv"
-        resource.Bucket(bucket).put_object(Key=object_key,
-                                           Body=stream.getvalue())
-        logger.debug('PUT_OBJECT: {0}:{1}'.format(outfile, bucket))
-        object_summary = resource.ObjectSummary(bucket, object_key)
-        logger.debug('OBJECT LOADED ON: {0} \nOBJECT SIZE: {1}'
-                     .format(object_summary.last_modified,
-                             object_summary.size))
+        resource.Bucket(config_bucket).put_object(Key=object_key,
+                                                  Body=stream.getvalue())
+        logger.debug('PUT_OBJECT: %s:%s', outfile, config_bucket)
+        object_summary = resource.ObjectSummary(config_bucket, object_key)
+        logger.debug('OBJECT LOADED ON: %s, OBJECT SIZE: %s',
+                     object_summary.last_modified, object_summary.size)
 
-        # Prepare the Redshift query
-        query = "copy " + dbtable + " FROM 's3://" + bucket + "/" + object_key + "' CREDENTIALS 'aws_access_key_id=" + os.environ['AWS_ACCESS_KEY_ID'] + ";aws_secret_access_key=" + os.environ['AWS_SECRET_ACCESS_KEY'] + "' IGNOREHEADER AS 1 MAXERROR AS 0 DELIMITER '|' NULL AS '-' ESCAPE;"
-        logquery = "copy " + dbtable + " FROM 's3://" + bucket + "/" + object_key + "' CREDENTIALS 'aws_access_key_id=" + 'AWS_ACCESS_KEY_ID' + ";aws_secret_access_key=" + 'AWS_SECRET_ACCESS_KEY' + "' IGNOREHEADER AS 1 MAXERROR AS 0 DELIMITER '|' NULL AS '-' ESCAPE;"
+        # Prepare the Redshift COPY command.
+        logquery = (
+            f"copy {config_dbtable} FROM 's3://{config_bucket}/{object_key}' "
+            "CREDENTIALS 'aws_access_key_id={AWS_ACCESS_KEY_ID};"
+            "aws_secret_access_key={AWS_SECRET_ACCESS_KEY}' "
+            "IGNOREHEADER AS 1 MAXERROR AS 0 DELIMITER '|' "
+            "NULL AS '-' ESCAPE TRUNCATECOLUMNS;")
+        query = logquery.format(
+            AWS_ACCESS_KEY_ID=os.environ['AWS_ACCESS_KEY_ID'],
+            AWS_SECRET_ACCESS_KEY=os.environ['AWS_SECRET_ACCESS_KEY'])
         logger.debug(logquery)
 
         # Load into Redshift
@@ -320,23 +421,21 @@ for site_item in sites:
                 try:
                     curs.execute(query)
                 # if the DB call fails, print error and place file in /bad
-                except psycopg2.Error as e:
-                    logger.error("".join((
-                        "Loading failed {0} index {1} for {2} with error:\n{3}"
-                        .format(site_name, index, date_in_range, e.pgerror),
-                        " Object key: {0}".format(object_key.split('/')[-1]))))
+                except psycopg2.Error:
+                    logger.exception(
+                        "FAILURE loading %s (%s index) over date range "
+                        "%s to %s into %s. Object key %s.", site_name,
+                        str(index), str(start_dt), str(end_dt),
+                        config_dbtable, object_key.split('/')[-1])
+                    clean_exit(1,'Could not load to redshift.')
                 else:
-                    logger.info("".join((
-                        "Loaded {0} index {1} for {2}  successfully."
-                        .format(site_name, index, date_in_range),
-                        ' Object key: {0}'.format(object_key.split('/')[-1]))))
-        # if we didn't add any new rows, set last_loaded_date to latest_date to
-        # break the loop, otherwise, set it to the last loaded date
-        if last_loaded_date == last_loaded(site_name):
-            last_loaded_date = latest_date
-        else:
-            # refresh last_loaded with the most recent load date
-            last_loaded_date = last_loaded(site_name)
+                    logger.info(
+                        "SUCCESS loading %s (%s index) over date range "
+                        "%s to %s into %s. Object key %s.", site_name,
+                        str(index), str(start_dt), str(end_dt),
+                        config_dbtable, object_key.split('/')[-1])
+        # set last_loaded_date to end_dt to iterate through the next month
+        last_loaded_date = end_dt
 
 
 # This query will INSERT data that is the result of a JOIN into
@@ -345,46 +444,64 @@ query = """
 -- perform this as a transaction.
 -- Either the whole query completes, or it leaves the old table intact
 BEGIN;
-DROP TABLE IF EXISTS cmslite.google_pdt_scratch;
-DROP TABLE IF EXISTS cmslite.google_pdt_old;
+DROP TABLE IF EXISTS cmslite.google_pdt;
 
-CREATE TABLE IF NOT EXISTS cmslite.google_pdt_scratch (
-        "site"          VARCHAR(255),
-        "date"          date,
-        "query"         VARCHAR(2048),
-        "country"       VARCHAR(255),
-        "device"        VARCHAR(255),
-        "page"          VARCHAR(2047),
-        "position"      FLOAT,
-        "clicks"        DECIMAL,
-        "ctr"           FLOAT,
-        "impressions"   DECIMAL,
-        "node_id"       VARCHAR(255),
-        "page_urlhost"  VARCHAR(255),
-        "title"         VARCHAR(2047),
-        "theme_id"      VARCHAR(255),
-        "subtheme_id"   VARCHAR(255),
-        "topic_id"      VARCHAR(255),
-        "theme"         VARCHAR(2047),
-        "subtheme"      VARCHAR(2047),
-        "topic"         VARCHAR(2047)
-);
-ALTER TABLE cmslite.google_pdt_scratch OWNER TO microservice;
-GRANT SELECT ON cmslite.google_pdt_scratch TO looker;
+CREATE TABLE IF NOT EXISTS cmslite.google_pdt (
+        site              VARCHAR(255)    ENCODE ZSTD,
+        date              date            ENCODE AZ64,
+        query             VARCHAR(2048)   ENCODE ZSTD,
+        country           VARCHAR(255)    ENCODE ZSTD,
+        device            VARCHAR(255)    ENCODE ZSTD,
+        page              VARCHAR(2047)   ENCODE ZSTD,
+        position          FLOAT           ENCODE ZSTD,
+        clicks            DECIMAL         ENCODE ZSTD,
+        ctr               FLOAT           ENCODE ZSTD,
+        impressions       DECIMAL         ENCODE ZSTD,
+        node_id           VARCHAR(255)    ENCODE ZSTD,
+        page_urlhost      VARCHAR(255)    ENCODE ZSTD,
+        title             VARCHAR(2047)   ENCODE ZSTD,
+        theme_id          VARCHAR(255)    ENCODE ZSTD,
+        subtheme_id       VARCHAR(255)    ENCODE ZSTD,
+        topic_id          VARCHAR(255)    ENCODE ZSTD,
+        subtopic_id       VARCHAR(255)    ENCODE ZSTD,
+        subsubtopic_id    VARCHAR(255)    ENCODE ZSTD,
+        theme             VARCHAR(2047)   ENCODE ZSTD,
+        subtheme          VARCHAR(2047)   ENCODE ZSTD,
+        topic             VARCHAR(2047)   ENCODE ZSTD,
+        subtopic          VARCHAR(2047)   ENCODE ZSTD,
+        subsubtopic       VARCHAR(2047)   ENCODE ZSTD)
+        COMPOUND SORTKEY (date,page_urlhost,theme,page,clicks);
 
-INSERT INTO cmslite.google_pdt_scratch
+ALTER TABLE cmslite.google_pdt OWNER TO microservice;
+GRANT SELECT ON cmslite.google_pdt TO looker;
+
+INSERT INTO cmslite.google_pdt
       SELECT gs.*,
-      COALESCE(node_id,'') AS node_id,
-      SPLIT_PART(site, '/',3) as page_urlhost,
-      title,
-      theme_id, subtheme_id, topic_id, theme, subtheme, topic
+          COALESCE(node_id,'') AS node_id,
+          SPLIT_PART(page, '/',3) as page_urlhost,
+          title,
+          theme_id, subtheme_id, topic_id, subtopic_id, subsubtopic_id, theme,
+          subtheme, topic, subtopic, subsubtopic
       FROM google.googlesearch AS gs
       -- fix for misreporting of redirected front page URL in Google search
-      LEFT JOIN cmslite.themes AS themes ON CASE WHEN page = 'https://www2.gov.bc.ca/' THEN 'https://www2.gov.bc.ca/gov/content/home' ELSE page END = themes.hr_url;
+      LEFT JOIN cmslite.themes AS themes ON
+        CASE WHEN page = 'https://www2.gov.bc.ca/'
+            THEN 'https://www2.gov.bc.ca/gov/content/home'
+            ELSE page
+            END = themes.hr_url
+        WHERE site NOT IN ('sc-domain:gov.bc.ca', 'sc-domain:engage.gov.bc.ca')
+            OR site = 'sc-domain:gov.bc.ca' AND page_urlhost NOT IN (
+                'healthgateway.gov.bc.ca',
+                'engage.gov.bc.ca',
+                'feedback.engage.gov.bc.ca',
+                'www2.gov.bc.ca',
+                'www.engage.gov.bc.ca',
+                'curriculum.gov.bc.ca',
+                'studentsuccess.gov.bc.ca',
+                'news.gov.bc.ca',
+                'bcforhighschool.gov.bc.ca')
+            OR site = 'sc-domain:engage.gov.bc.ca';
 
-ALTER TABLE cmslite.google_pdt RENAME TO google_pdt_old;
-ALTER TABLE cmslite.google_pdt_scratch RENAME TO google_pdt;
-DROP TABLE cmslite.google_pdt_old;
 COMMIT;
 """
 
@@ -394,8 +511,9 @@ with psycopg2.connect(conn_string) as conn:
     with conn.cursor() as curs:
         try:
             curs.execute(query)
-        except psycopg2.Error as e:
-            logger.error("Google Search PDT loading failed\n{0}".
-                         format(e.pgerror))
+        except psycopg2.Error:
+            logger.exception("Google Search PDT loading failed")
+            clean_exit(1,'Could not rebuild PDT in Redshift.')
         else:
             logger.info("Google Search PDT loaded successfully")
+            clean_exit(0,'Finished succesfully.')

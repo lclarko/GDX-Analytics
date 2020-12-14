@@ -1,3 +1,4 @@
+"""Google My Business API Loader Script"""
 ###################################################################
 # Script Name   : google_mybusiness.py
 #
@@ -64,13 +65,14 @@ import dateutil.relativedelta
 
 import googleapiclient.errors
 
-from io import BytesIO
+from io import StringIO
 import datetime
 from datetime import timedelta
-from apiclient.discovery import build
+from googleapiclient.discovery import build
 from oauth2client import tools
 from oauth2client.file import Storage
 from oauth2client.client import flow_from_clientsecrets
+import lib.logs as log
 
 
 # Ctrl+C
@@ -81,24 +83,13 @@ def signal_handler(signal, frame):
 
 # Set up logging
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+log.setup()
 
-# create console handler for logs at the INFO level
-# This will be emailed when the cron task runs; formatted to give messages only
-handler = logging.StreamHandler()
-handler.setLevel(logging.INFO)
-formatter = logging.Formatter('%(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
 
-# create file handler for logs at the DEBUG level
-log_filename = '{0}'.format(os.path.basename(__file__).replace('.py', '.log'))
-handler = logging.FileHandler(os.path.join('logs', log_filename), 'a',
-                              encoding=None, delay='true')
-handler.setLevel(logging.DEBUG)
-formatter = logging.Formatter('%(levelname)s:%(name)s:%(asctime)s:%(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
+def clean_exit(code, message):
+    """Exits with a logger message and code"""
+    logger.debug('Exiting with code %s : %s', str(code), message)
+    sys.exit(code)
 
 
 # Command line arguments
@@ -122,24 +113,27 @@ with open(CONFIG) as f:
     config = json.load(f)
 
 config_bucket = config['bucket']
+config_source = config['source']
+config_destination = config['destination']
+config_directory = config['directory']
 config_dbtable = config['dbtable']
 config_metrics = config['metrics']
 config_locations = config['locations']
 
 
 # set up the S3 resource
-client = boto3.client('s3')
+s3 = boto3.client('s3')
 resource = boto3.resource('s3')
 
 
 # set up the Redshift connection
-conn_string = """
-dbname='{dbname}' host='{host}' port='{port}' user='{user}' password={password}
-""".format(dbname='snowplow',
-           host='redshift.analytics.gov.bc.ca',
-           port='5439',
-           user=os.environ['pguser'],
-           password=os.environ['pgpass'])
+dbname = 'snowplow'
+host = 'redshift.analytics.gov.bc.ca'
+port = '5439'
+user = os.environ['pguser']
+password = os.environ['pgpass']
+conn_string = (f"dbname='{dbname}' host='{host}' port='{port}' "
+               f"user='{user}' password={password}")
 
 
 # Setup OAuth 2.0 flow for the Google My Business API
@@ -229,18 +223,17 @@ for loc in config_locations:
                 'id': item['accountNumber'],
                 'client_shortname': loc['client_shortname'],
                 'start_date': loc['start_date'],
-                'end_date': loc['end_date'],
-                'names_replacement': loc['names_replacement']}
+                'end_date': loc['end_date']}
                  for item
                  in accounts
                  if item['accountNumber'] == str(loc['id'])))
     except StopIteration:
         logger.exception(
-            'No API access to {0}. Excluding from insights query.'
-            .format(loc['name']))
+            'No API access to %s. Excluding from insights query.', loc['name'])
         continue
 
 # iterate over ever location of every account
+badfiles = 0
 for account in validated_accounts:
 
     dbtable = config_dbtable
@@ -252,15 +245,11 @@ for account in validated_accounts:
     # we will handle each location separately
     for loc in locations['locations']:
 
-        logger.debug("Begin processing on location: {}"
-                     .format(loc['locationName']))
-        # substring replacement for location names from config file
-        find_in_name = account['names_replacement'][0]
-        rep_in_name = account['names_replacement'][1]
+        logger.debug("Begin processing on location: %s", loc['locationName'])
 
         # encode as ASCII for dataframe
-        location_uri = loc['name'].encode('ascii', 'ignore')
-        location_name = loc['locationName'].replace(find_in_name, rep_in_name)
+        location_uri = loc['name']
+        location_name = loc['locationName']
 
         # if a start_date is defined in the config file, use that date
         start_date = account['start_date']
@@ -278,8 +267,8 @@ for account in validated_accounts:
         # query RedShift to see if there is a date already loaded
         last_loaded_date = last_loaded(config_dbtable, loc['name'])
         if last_loaded_date is None:
-            logger.info("first time loading {}: {}"
-                        .format(account['name'], loc['name']))
+            logger.info("first time loading %s: %s",
+                        account['name'], loc['name'])
 
         # If it is loaded with some data for this ID, use that date plus
         # one day as the start_date.
@@ -288,7 +277,7 @@ for account in validated_accounts:
             start_date = last_loaded_date + timedelta(days=1)
             start_date = start_date.isoformat()
 
-        start_time = start_date + 'T00:00:00Z'
+        start_time = start_date + 'T01:00:00Z'
 
         # the most recently available data from the Google API is 2 days before
         # the query time. More details in the API reference at:
@@ -298,22 +287,22 @@ for account in validated_accounts:
         # if an end_date is defined in the config file, use that date
         end_date = account['end_date']
         if end_date == '':
-
             end_date = date_api_upper_limit
         if end_date > date_api_upper_limit:
-            logger.warning("The end_date for location {} is more recent than 2\
-                            days ago.".format(location_name))
+            logger.warning(
+                "The end_date for location %s is more recent than 2 days ago.",
+                location_name)
 
-        end_time = end_date + 'T00:00:00Z'
+        end_time = end_date + 'T01:00:00Z'
 
         # if start and end times are same, then there's no new data
         if start_time == end_time:
-            logger.info("Redshift already contains the latest avaialble data\
-                        for location {}.".format(location_name))
+            logger.info(
+                "Redshift already contains the latest avaialble data for %s.",
+                location_name)
             continue
 
-        logger.debug("Querying range from {0} to {1}"
-                     .format(start_date, end_date))
+        logger.debug("Querying range from %s to %s", start_date, end_date)
 
         # the API call must construct each metric request in a list of dicts
         metricRequests = []
@@ -326,21 +315,20 @@ for account in validated_accounts:
                 )
 
         bodyvar = {
-            'locationNames': ['{0}'.format(location_uri)],
+            'locationNames': [f'{location_uri}'],
             'basicRequest': {
                 # https://developers.google.com/my-business/reference/rest/v4/Metric
                 'metricRequests': metricRequests,
                 # https://developers.google.com/my-business/reference/rest/v4/BasicMetricsRequest
                 # The maximum range is 18 months from the request date.
                 'timeRange': {
-                    'startTime': '{0}'.format(start_time),
-                    'endTime': '{0}'.format(end_time)
+                    'startTime': f'{start_time}',
+                    'endTime': f'{end_time}'
                     }
                 }
             }
 
-        logger.debug("Request body:\n{0}"
-                     .format(json.dumps(bodyvar, indent=2)))
+        logger.debug("Request body:\n%s", json.dumps(bodyvar, indent=2))
 
         # retrieves the request for this location.
         try:
@@ -351,14 +339,16 @@ for account in validated_accounts:
             logger.exception("Request contains an invalid argument. Skipping.")
             continue
 
+        logger.debug("Response body\n%s", reportInsights)
+
         # We constrain API calls to one location at a time, so
         # there is only one element in the locationMetrics list:
         metrics = reportInsights['locationMetrics'][0]['metricValues']
 
         for metric in metrics:
-            metric_name = metric['metric'].lower().encode('ascii', 'ignore')
+            metric_name = metric['metric'].lower()
 
-            logger.debug("processing metric: {0}".format(metric_name))
+            logger.debug("processing metric: %s", metric_name)
 
             # iterate on the dimensional values for this metric.
 
@@ -391,45 +381,44 @@ for account in validated_accounts:
         df = df.astype('int64')
 
         # prepare csv buffer
-        csv_buffer = BytesIO()
+        csv_buffer = StringIO()
         df.to_csv(csv_buffer, index=True, header=True, sep='|')
 
         # Set up the S3 path to write the csv buffer to
-        object_key_path = 'client/google_mybusiness_{}/'.format(
-            account['client_shortname'])
+        object_key_path = (f"{config_source}/"
+                           f"{config_directory}/"
+                           f"{account['client_shortname']}/")
 
-        outfile = 'gmb_{0}_{1}_{2}.csv'.format(
-            location_name.replace(' ', '-'),
-            start_date,
-            end_date)
+        outfile = (f"gmb_"
+                   f"{location_name.replace(' ', '-')}_"
+                   f"{start_date}_"
+                   f"{end_date}"
+                   f".csv")
+
         object_key = object_key_path + outfile
 
         resource.Bucket(config_bucket).put_object(
             Key=object_key,
             Body=csv_buffer.getvalue())
-        logger.debug('PUT_OBJECT: {0}:{1}'.format(outfile, config_bucket))
+        logger.debug('PUT_OBJECT: %s:%s', outfile, config_bucket)
         object_summary = resource.ObjectSummary(config_bucket, object_key)
-        logger.debug('OBJECT LOADED ON: {0} \nOBJECT SIZE: {1}'
-                     .format(object_summary.last_modified,
-                             object_summary.size))
+        logger.debug('OBJECT LOADED ON: %s OBJECT SIZE: %s',
+                     object_summary.last_modified, object_summary.size)
 
         # Prepare the Redshift COPY command.
-        query = (
-            "copy " + config_dbtable + " FROM 's3://" + config_bucket
-            + "/" + object_key + "' CREDENTIALS 'aws_access_key_id="
-            + os.environ['AWS_ACCESS_KEY_ID'] + ";aws_secret_access_key="
-            + os.environ['AWS_SECRET_ACCESS_KEY']
-            + ("' IGNOREHEADER AS 1 MAXERROR AS 0 DELIMITER"
-                + " '|' NULL AS '-' ESCAPE;"))
         logquery = (
-            "copy " + config_dbtable + " FROM 's3://" + config_bucket
-            + "/" + object_key + "' CREDENTIALS 'aws_access_key_id="
-            + 'AWS_ACCESS_KEY_ID' + ";aws_secret_access_key="
-            + 'AWS_SECRET_ACCESS_KEY' + (
-                "' IGNOREHEADER AS 1 MAXERROR"
-                + " AS 0 DELIMITER '|' NULL AS '-' ESCAPE;"))
+            (f"copy {config_dbtable} FROM 's3://{config_bucket}/{object_key}' "
+             "CREDENTIALS 'aws_access_key_id={AWS_ACCESS_KEY_ID};"
+             "aws_secret_access_key={AWS_SECRET_ACCESS_KEY}' "
+             "IGNOREHEADER AS 1 MAXERROR AS 0 DELIMITER '|' "
+             "NULL AS '-' ESCAPE;"))
+        query = logquery.format(
+            AWS_ACCESS_KEY_ID=os.environ['AWS_ACCESS_KEY_ID'],
+            AWS_SECRET_ACCESS_KEY=os.environ['AWS_SECRET_ACCESS_KEY'])
         logger.debug(logquery)
 
+        goodfile = f"{config_destination}/good/{object_key}"
+        badfile = f"{config_destination}/bad/{object_key}"
         # Connect to Redshift and execute the query.
         with psycopg2.connect(conn_string) as conn:
             with conn.cursor() as curs:
@@ -440,8 +429,25 @@ for account in validated_accounts:
                         "Loading failed {0} with error:\n{1}"
                         .format(location_name, e.pgerror),
                         " Object key: {0}".format(object_key.split('/')[-1]))))
+                    movefile = badfile
+                    badfiles += 1
                 else:
                     logger.info("".join((
                         "Loaded {0} successfully."
                         .format(location_name),
                         ' Object key: {0}'.format(object_key.split('/')[-1]))))
+                    movefile = goodfile
+
+        # copy the object to the S3 outfile (processed/good/ or processed/bad/)
+        try:
+            s3.copy_object(
+                Bucket="sp-ca-bc-gov-131565110619-12-microservices",
+                CopySource="sp-ca-bc-gov-131565110619-12-microservices/{}"
+                .format(object_key), Key=movefile)
+        except boto3.exceptions.ClientError:
+            logger.exception("S3 transfer to %s failed", movefile)
+            clean_exit(1,f'S3 transfer of {object_key} to {movefile} failed.')
+
+if badfiles:
+    clean_exit(1,'A file was processed as bad on this run.')
+clean_exit(0,'Ran without errors.')

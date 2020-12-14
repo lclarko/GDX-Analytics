@@ -1,5 +1,8 @@
 {
   "bucket": "sp-ca-bc-gov-131565110619-12-microservices",
+  "source": "client",
+  "destination": "processed",
+  "directory": "google_gdx",
   "dbtable": "google.googlesearch",
   "sites": [
     {
@@ -30,10 +33,6 @@
       "start_date_default":"2018-04-04"
     },
     {
-      "name":"https://healthgateway.gov.bc.ca/",
-      "start_date_default":"2020-01-20"
-    },
-    {
       "name":"sc-domain:engage.gov.bc.ca",
       "start_date_default":"2018-09-16"
     },
@@ -44,6 +43,72 @@
     {
       "name":"https://rightforyou.workbc.ca/",
       "start_date_default":"2020-01-20"
+    },
+    {
+      "name": "http://www.bccdc.ca/"
+    },
+    {
+      "name": "sc-domain:gov.bc.ca"
+    },
+    {
+      "name": "sc-domain:thrive.health",
+      "start_date_default": "2019-06-13"
+    },
+    {
+      "name": "https://www.healthlinkbc.ca"
+    },
+    {
+      "name": "https://www.workbc.ca/",
+      "start_date_default": "2020-04-23"
+    },
+    {
+      "name": "https://www.costofliving.workbc.ca/",
+      "start_date_default": "2020-04-23"
+    },
+    {
+      "name": "https://www.careertrekbc.ca/",
+      "start_date_default": "2020-04-23"
+    },
+    {
+      "name": "https://www.britishcolumbia.ca/",
+      "start_date_default": "2019-02-02"
+    },
+    {
+      "name": "https://www.britishcolumbia.kr/",
+      "start_date_default": "2019-02-02"
+    },
+    {
+      "name": "https://www.britishcolumbia.jp/",
+      "start_date_default": "2019-02-02"
+    },
+    {
+      "name": "https://www.british-columbia.cn/",
+      "start_date_default": "2019-02-02"
+    },
+    {
+      "name": "https://energystepcode.ca/",
+      "start_date_default": "2020-08-12"
+    },
+    {
+      "name": "https://www.justicebc.ca/",
+      "start_date_default": "2020-09-09"
+    },
+    {
+      "name": "https://www.bcmhrb.ca/",
+      "start_date_default": "2020-09-14"
+    },
+    {
+      "name": "https://iiobc.ca/",
+      "start_date_default": "2020-09-14"
+    },
+    {
+      "name": "https://professionalgovernancebc.ca/",
+      "start_date_default": "2020-09-14"
+    },
+    {
+      "name": "https://www.welcomebc.ca/",
+      "start_date_default": "2020-08-16"
     }
+
   ]
 }
